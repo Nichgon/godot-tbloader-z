@@ -1,7 +1,10 @@
 # TrenchBroom Loader for Godot
 - Builded new dll for new features.
 - Fix entity name when import scene.
-  
+
+# Usage
+Copy addons folder to your godot project and enable plugin in project settings.
+
 # Building
 On all platforms, the build process is the same. Make sure scons is installed, and then just run
 `scons target=template_release` to build.
