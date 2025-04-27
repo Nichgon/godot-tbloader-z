@@ -1,5 +1,5 @@
 # TrenchBroom Loader for Godot
-- Build new dll for new features.
+- Builded new dll for new features.
 - Fix entity name when import scene.
   
 # Building
