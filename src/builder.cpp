@@ -147,6 +147,10 @@ Node* Builder::build_entity(int idx, LMEntity& ent, const String& classname)
 		if (ent.has_property("name")) {
 			newEntityNode->set_name(ent.get_property("name"));
 		}
+		else {
+			String custom_name = "entity_" + itos(idx) + "_" + classname;
+			newEntityNode->set_name(custom_name);
+		}
 	}
 
 	return newEntityNode;
