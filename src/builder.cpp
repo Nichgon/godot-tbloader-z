@@ -7,9 +7,12 @@
 #include <godot_cpp/classes/shape3d.hpp>
 #include <godot_cpp/classes/packed_scene.hpp>
 #include <godot_cpp/classes/standard_material3d.hpp>
+#include <godot_cpp/classes/shader_material.hpp>
+#include <godot_cpp/classes/shader.hpp>
 #include <godot_cpp/classes/convex_polygon_shape3d.hpp>
 #include <godot_cpp/classes/concave_polygon_shape3d.hpp>
 #include <godot_cpp/templates/vmap.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
 
 #include <tb_loader.h>
 
@@ -460,6 +463,27 @@ void Builder::add_surface_to_mesh(Ref<ArrayMesh>& mesh, LMSurface& surf)
 	mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
 }
 
+String get_filename_part(const String& path) {
+	int last_slash = path.rfind("/");
+	if (last_slash != -1) {
+		return path.substr(last_slash + 1);
+	}
+	else {
+		return path;
+	}
+}
+
+// Get only the folder path (before last '/')
+String get_folder_part(const String& path) {
+	int last_slash = path.rfind("/");
+	if (last_slash != -1) {
+		return path.substr(0, last_slash);
+	}
+	else {
+		return ""; // No folder part
+	}
+}
+
 MeshInstance3D* Builder::build_entity_mesh(int idx, LMEntity& ent, Node3D* parent, ColliderType coltype, ColliderShape colshape)
 {
 	// Create instance name based on entity idx
@@ -501,35 +525,74 @@ MeshInstance3D* Builder::build_entity_mesh(int idx, LMEntity& ent, Node3D* paren
 		material = material_from_name(tex.name);
 
 		if (material == nullptr) {
-			// Load texture
-			auto res_texture = texture_from_name(tex.name);
+			String filename_part = get_filename_part(tex.name);
+			String folder_part = get_folder_part(tex.name);
+			// godot::UtilityFunctions::print("Checking original name: " + String(tex.name));
+			// godot::UtilityFunctions::print("Checking file name: " + filename_part);
+			if (filename_part.begins_with("+")) {
+				Vector<Ref<Texture2D>> texture_frames;
+				int frame_count = 0;
 
-			// Create material
-			if (res_texture != nullptr) {
-				Ref<Material> new_material;
-
-				if (has_material_template) {
-					// Duplicate and set texture for material template
-					// Only creates one copy per texture; materials are reused using a map
-					if (!material_template_map.has(tex.name)) {
-						auto material_template_copy = material_template->duplicate();
-						material_template_copy->set(m_loader->get_material_texture_path(), res_texture);
-						material_template_map.insert(tex.name, material_template_copy);
+				// Try to collect +0name, +1name, +2name, ..., +9name
+				for (int i = 0; i <= 9; i++) {
+					// godot::UtilityFunctions::print("Loop: " + String::num_int64(i, 10));
+					String frame_texture_name = folder_part + "/+" + String::num_int64(i, 10) + filename_part.substr(2);  // create a String
+					// godot::UtilityFunctions::print("Checking texture name: " + frame_texture_name);
+					auto frame_texture = texture_from_name(frame_texture_name.utf8().get_data());    // convert to const char*
+					if (frame_texture.is_valid()) {
+						// godot::UtilityFunctions::print("Valid!!");
+						texture_frames.push_back(frame_texture);
+						frame_count++;
 					}
-					new_material = material_template_map[tex.name];
-				} else {
-					// Generate new material if no template supplied
-					Ref<StandardMaterial3D> new_standard_material = memnew(StandardMaterial3D());
-					new_standard_material->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, res_texture);
-					if (m_loader->m_filter_nearest) {
-						new_standard_material->set_texture_filter(BaseMaterial3D::TEXTURE_FILTER_NEAREST);
+					else {
+						break; // stop if frame missing
 					}
-					new_material = new_standard_material;
 				}
 
-				material = new_material;
+				Ref<ShaderMaterial> animated_shader_material = memnew(ShaderMaterial);
+				Ref<Shader> animated_shader = ResourceLoader::get_singleton()->load("res://addons/tbloader/shaders/animated_shader.gdshader");
+
+				animated_shader_material->set_shader(animated_shader);
+
+				// Build array
+				TypedArray<Texture2D> frames_array;
+				for (int i = 0; i < frame_count; i++) {
+					frames_array.append(texture_frames[i]);
+				}
+
+				animated_shader_material->set_shader_parameter("frames", frames_array);
+				animated_shader_material->set_shader_parameter("frame_count", frame_count);
+
+				material = animated_shader_material;
+			}
+			else {
+				// Normal material (non-animated)
+				auto res_texture = texture_from_name(tex.name);
+				if (res_texture.is_valid()) {
+					Ref<Material> new_material;
+
+					if (has_material_template) {
+						if (!material_template_map.has(tex.name)) {
+							auto material_template_copy = material_template->duplicate();
+							material_template_copy->set(m_loader->get_material_texture_path(), res_texture);
+							material_template_map.insert(tex.name, material_template_copy);
+						}
+						new_material = material_template_map[tex.name];
+					}
+					else {
+						Ref<StandardMaterial3D> new_standard_material = memnew(StandardMaterial3D());
+						new_standard_material->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, res_texture);
+						if (m_loader->m_filter_nearest) {
+							new_standard_material->set_texture_filter(BaseMaterial3D::TEXTURE_FILTER_NEAREST);
+						}
+						new_material = new_standard_material;
+					}
+
+					material = new_material;
+				}
 			}
 		}
+
 
 		// Gather surfaces for this texture
 		LMSurfaceGatherer surf_gather(m_map);
@@ -620,6 +683,23 @@ void Builder::load_and_cache_map_textures()
 			if (resource_loader->exists(tex_path, "CompressedTexture2D")) {
 				m_loaded_map_textures[tex.name] = resource_loader->load(tex_path);
 				has_loaded_texture = true;
+
+				// --- ADDITIONAL: Try to load +0name, +1name, ..., +9name
+				String filename_part = get_filename_part(tex.name);
+				String folder_part = get_folder_part(tex.name);
+				if (filename_part[0] == '+') { // If texture name starts with '+'
+					String base_name = String(filename_part).substr(2); // Remove '+' and number
+					for (int i = 0; i <= 9; i++) {
+						String frame_name = folder_part + "/+" + String::num_int64(i, 10) + base_name;
+						for (int ext2_i = 0; ext2_i < num_extensions; ext2_i++) {
+							String frame_tex_path = texture_path(frame_name.utf8().get_data(), supported_extensions[ext2_i]);
+							if (resource_loader->exists(frame_tex_path, "CompressedTexture2D")) {
+								m_loaded_map_textures[frame_name.utf8().get_data()] = resource_loader->load(frame_tex_path);
+								break;
+							}
+						}
+					}
+				}
 				break;
 			}
 		}
