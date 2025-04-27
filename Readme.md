@@ -1,7 +1,7 @@
 # TrenchBroom Loader for Godot
 - Builded new dll for new features.
 - Fix entity name when import scene.
-- Animated textures are partialy work.
+- Animated textures are partially work.
 
 # Usage
 Copy addons folder to your godot project and enable plugin in project settings.
