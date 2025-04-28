@@ -529,23 +529,43 @@ MeshInstance3D* Builder::build_entity_mesh(int idx, LMEntity& ent, Node3D* paren
 			String folder_part = get_folder_part(tex.name);
 			// godot::UtilityFunctions::print("Checking original name: " + String(tex.name));
 			// godot::UtilityFunctions::print("Checking file name: " + filename_part);
+
+			// Try to load +0name, +1name, ..., +9name or +Aname, +Bname, ..., +Jname
 			if (filename_part.begins_with("+")) {
+				bool is_alphabetic = filename_part[1] >= 'A' && filename_part[1] <= 'J'; // Check if it starts with a letter
+				String base_name = filename_part.substr(2); // Remove '+' and the number/letter
 				Vector<Ref<Texture2D>> texture_frames;
 				int frame_count = 0;
 
-				// Try to collect +0name, +1name, +2name, ..., +9name
-				for (int i = 0; i <= 9; i++) {
-					// godot::UtilityFunctions::print("Loop: " + String::num_int64(i, 10));
-					String frame_texture_name = folder_part + "/+" + String::num_int64(i, 10) + filename_part.substr(2);  // create a String
-					// godot::UtilityFunctions::print("Checking texture name: " + frame_texture_name);
-					auto frame_texture = texture_from_name(frame_texture_name.utf8().get_data());    // convert to const char*
-					if (frame_texture.is_valid()) {
-						// godot::UtilityFunctions::print("Valid!!");
-						texture_frames.push_back(frame_texture);
-						frame_count++;
+				if (is_alphabetic) {
+					// If it starts with a letter, add +A, +B, ..., +J
+					for (char letter = 'A'; letter <= 'J'; letter++) {
+						String frame_texture_name = folder_part + "/+" + String::chr(letter) + base_name;
+						auto frame_texture = texture_from_name(frame_texture_name.utf8().get_data());    // convert to const char*
+						if (frame_texture.is_valid()) {
+							texture_frames.push_back(frame_texture);
+							frame_count++;
+						}
+						else {
+							break; // stop if frame missing
+						}
 					}
-					else {
-						break; // stop if frame missing
+				}
+				else {
+					for (int i = 0; i <= 9; i++) {
+						// If it doesn't start with a letter, continue with +0, +1, ..., +9
+						// godot::UtilityFunctions::print("Loop: " + String::num_int64(i, 10));
+						String frame_texture_name = folder_part + "/+" + String::num_int64(i, 10) + base_name;  // create a String
+						// godot::UtilityFunctions::print("Checking texture name: " + frame_texture_name);
+						auto frame_texture = texture_from_name(frame_texture_name.utf8().get_data());    // convert to const char*
+						if (frame_texture.is_valid()) {
+							// godot::UtilityFunctions::print("Valid!!");
+							texture_frames.push_back(frame_texture);
+							frame_count++;
+						}
+						else {
+							break; // stop if frame missing
+						}
 					}
 				}
 
@@ -562,11 +582,26 @@ MeshInstance3D* Builder::build_entity_mesh(int idx, LMEntity& ent, Node3D* paren
 
 				animated_shader_material->set_shader_parameter("frames", frames_array);
 				animated_shader_material->set_shader_parameter("frame_count", frame_count);
+				if (base_name.begins_with("~")) {
+					animated_shader_material->set_shader_parameter("unshaded", true);
+				}
 
 				material = animated_shader_material;
 			}
+			else if (filename_part.begins_with("!")) {
+				// Water material
+				auto res_texture = texture_from_name(tex.name);
+
+				Ref<ShaderMaterial> water_shader_material = memnew(ShaderMaterial);
+				Ref<Shader> water_shader = ResourceLoader::get_singleton()->load("res://addons/tbloader/shaders/water_shader.gdshader");
+
+				water_shader_material->set_shader(water_shader);
+				water_shader_material->set_shader_parameter("albedo", res_texture);
+
+				material = water_shader_material;
+			}
 			else {
-				// Normal material (non-animated)
+				// Normal material
 				auto res_texture = texture_from_name(tex.name);
 				if (res_texture.is_valid()) {
 					Ref<Material> new_material;
@@ -578,6 +613,13 @@ MeshInstance3D* Builder::build_entity_mesh(int idx, LMEntity& ent, Node3D* paren
 							material_template_map.insert(tex.name, material_template_copy);
 						}
 						new_material = material_template_map[tex.name];
+						if (new_material->is_class("StandardMaterial3D")) {
+							Ref<StandardMaterial3D> temp_material = new_material;
+							if (String(tex.name).begins_with("~")) {
+								temp_material->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+							}
+							new_material = temp_material;
+						}
 					}
 					else {
 						Ref<StandardMaterial3D> new_standard_material = memnew(StandardMaterial3D());
@@ -585,6 +627,7 @@ MeshInstance3D* Builder::build_entity_mesh(int idx, LMEntity& ent, Node3D* paren
 						if (m_loader->m_filter_nearest) {
 							new_standard_material->set_texture_filter(BaseMaterial3D::TEXTURE_FILTER_NEAREST);
 						}
+						new_standard_material->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
 						new_material = new_standard_material;
 					}
 
@@ -684,18 +727,36 @@ void Builder::load_and_cache_map_textures()
 				m_loaded_map_textures[tex.name] = resource_loader->load(tex_path);
 				has_loaded_texture = true;
 
-				// --- ADDITIONAL: Try to load +0name, +1name, ..., +9name
+				// --- ADDITIONAL: Try to load +0name, +1name, ..., +9name or +Aname, +Bname, ..., +Jname
 				String filename_part = get_filename_part(tex.name);
 				String folder_part = get_folder_part(tex.name);
+
 				if (filename_part[0] == '+') { // If texture name starts with '+'
-					String base_name = String(filename_part).substr(2); // Remove '+' and number
-					for (int i = 0; i <= 9; i++) {
-						String frame_name = folder_part + "/+" + String::num_int64(i, 10) + base_name;
-						for (int ext2_i = 0; ext2_i < num_extensions; ext2_i++) {
-							String frame_tex_path = texture_path(frame_name.utf8().get_data(), supported_extensions[ext2_i]);
-							if (resource_loader->exists(frame_tex_path, "CompressedTexture2D")) {
-								m_loaded_map_textures[frame_name.utf8().get_data()] = resource_loader->load(frame_tex_path);
-								break;
+					bool is_alphabetic = filename_part[1] >= 'A' && filename_part[1] <= 'J'; // Check if it starts with a letter
+					String base_name = String(filename_part).substr(2); // Remove '+' and number/letter
+
+					if (is_alphabetic) {
+						// If it starts with a letter, add +A, +B, ..., +J
+						for (char letter = 'A'; letter <= 'J'; letter++) {
+							String frame_name = folder_part + "/+" + String::chr(letter) + base_name;
+							for (int ext2_i = 0; ext2_i < num_extensions; ext2_i++) {
+								String frame_tex_path = texture_path(frame_name.utf8().get_data(), supported_extensions[ext2_i]);
+								if (resource_loader->exists(frame_tex_path, "CompressedTexture2D")) {
+									m_loaded_map_textures[frame_name.utf8().get_data()] = resource_loader->load(frame_tex_path);
+									break;
+								}
+							}
+						}
+					} else {
+						// If it doesn't start with a letter, continue with +0, +1, ..., +9
+						for (int i = 0; i <= 9; i++) {
+							String frame_name = folder_part + "/+" + String::num_int64(i, 10) + base_name;
+							for (int ext2_i = 0; ext2_i < num_extensions; ext2_i++) {
+								String frame_tex_path = texture_path(frame_name.utf8().get_data(), supported_extensions[ext2_i]);
+								if (resource_loader->exists(frame_tex_path, "CompressedTexture2D")) {
+									m_loaded_map_textures[frame_name.utf8().get_data()] = resource_loader->load(frame_tex_path);
+									break;
+								}
 							}
 						}
 					}
